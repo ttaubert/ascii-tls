@@ -1,0 +1,7 @@
+[package]
+name = "ascii-tls"
+version = "0.1.0"
+authors = ["Tim Taubert <tim@timtaubert.de>"]
+
+[dependencies]
+nom = "^2.1"
