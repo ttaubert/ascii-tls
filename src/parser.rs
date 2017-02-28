@@ -107,6 +107,11 @@ named!(opaque<&[u8], Type>,
 );
 
 // A field, i.e. a type and a value.
+//
+// Examples:
+//   uint8 name = "value";
+//   opaque plaintext = { ... };
+//   opaque(uint8) data = "value";
 named!(field<&[u8], Field>,
   do_parse!(
     opt!(blanks) >>
@@ -122,7 +127,8 @@ named!(field<&[u8], Field>,
   )
 );
 
-// A list of fields, separated by ";". The last ";" in a list can be omitted.
+// A list of fields, separated by ";".
+// The last ";" in a list can be omitted.
 named!(field_list<&[u8], Vec<Field>>,
   do_parse!(
     fs: separated_list!(char!(';'), field) >>
@@ -132,6 +138,14 @@ named!(field_list<&[u8], Vec<Field>>,
 );
 
 // A block, i.e. a list of fields, i.e. a list of values.
+//
+// Examples:
+//   { uint8 type = handshake }
+//
+//   {
+//     uint8 type = handshake;
+//     uint24 length = 0x0000ff;
+//   }
 named!(block<&[u8], Vec<Field>>,
   do_parse!(
     tag!("{") >>
