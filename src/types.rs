@@ -22,16 +22,14 @@ impl<'a> Record {
 }
 
 // TODO
-#[derive(Debug)]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum Type {
   Uint(u8),
   Opaque(u8)
 }
 
 // TODO
-#[derive(Debug)]
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Field {
   typ: Type,
   value: Vec<u8>

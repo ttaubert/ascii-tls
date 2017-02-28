@@ -106,7 +106,7 @@ named!(opaque<&[u8], Type>,
   ), |w| { Type::Opaque(w) })
 );
 
-// TODO
+// A field, i.e. a type and a value.
 named!(field<&[u8], Field>,
   do_parse!(
     opt!(blanks) >>
@@ -118,18 +118,25 @@ named!(field<&[u8], Field>,
     opt!(blanks) >>
     v: value >>
     opt!(blanks) >>
-    tag!(";") >>
-    opt!(blanks) >>
     (Field::new(t, v))
   )
 );
 
-// TODO
+// A list of fields, separated by ";". The last ";" in a list can be omitted.
+named!(field_list<&[u8], Vec<Field>>,
+  do_parse!(
+    fs: separated_list!(char!(';'), field) >>
+    cond!(fs.len() > 0, char!(';')) >>
+    (fs)
+  )
+);
+
+// A block, i.e. a list of fields, i.e. a list of values.
 named!(block<&[u8], Vec<Field>>,
   do_parse!(
     tag!("{") >>
     opt!(blanks) >>
-    fs: many0!(field) >>
+    fs: field_list >>
     opt!(blanks) >>
     tag!("}") >>
     (fs)
@@ -219,12 +226,20 @@ mod tests {
 
     parse_block("{uint8 field = \"value\";}",
                 vec!(Field::new(Type::Uint(1), b"value".to_vec())));
+    parse_block("{uint8 field = \"value\" ; }",
+                vec!(Field::new(Type::Uint(1), b"value".to_vec())));
+    parse_block("{uint8 field = \"value\"}",
+                vec!(Field::new(Type::Uint(1), b"value".to_vec())));
 
     parse_block("{uint8 field = \"value\";uint8 field = \"value\";}",
                 vec!(Field::new(Type::Uint(1), b"value".to_vec()),
                      Field::new(Type::Uint(1), b"value".to_vec())));
 
     parse_block("{uint8 field = \"value\"; uint8 field = \"value\";}",
+                vec!(Field::new(Type::Uint(1), b"value".to_vec()),
+                     Field::new(Type::Uint(1), b"value".to_vec())));
+
+    parse_block("{uint8 field = \"value\"; uint8 field = \"value\"}",
                 vec!(Field::new(Type::Uint(1), b"value".to_vec()),
                      Field::new(Type::Uint(1), b"value".to_vec())));
 
@@ -263,7 +278,11 @@ mod tests {
 
   #[test]
   fn test_block_failure() {
+    assert_eq!(block(b"{ ; }"),
+               Error(nom::ErrorKind::Tag));
     assert_eq!(block(b"{ uint8 field \"value\" }"),
+               Error(nom::ErrorKind::Tag));
+    assert_eq!(block(b"{ uint8 field = \"value\";; }"),
                Error(nom::ErrorKind::Tag));
     assert_eq!(block(b"{ uint8 field = \"value\" uint16 field = \"value2\" }"),
                Error(nom::ErrorKind::Tag));
