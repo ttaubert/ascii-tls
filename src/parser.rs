@@ -29,34 +29,57 @@ named!(blanks,
 // TODO replace \" \t \r \n \0 \\
 /* Parses a string delimited by quotation marks. */
 named!(string<&[u8], Vec<u8>>,
-       map!(delimited!(char!('"'), is_not!("\""), char!('"')), |s: &[u8]| { s.to_vec() }));
+  map!(
+    delimited!(char!('"'), is_not!("\""), char!('"')),
+    |s: &[u8]| { s.to_vec() }
+  )
+);
 
-// TODO
-// separated_nonempty_list(sep, X) returns a Vec<X> of at list one element
-// preceded!(opening, X) returns x
-/*named!(hex<&[u8], Vec<u8>>, many1!(map_res!(chain!(tag!("0x")? ~ v: take!(2) ~ tag!(",")?, || { v }), |bytes: &[u8]| -> Result<u8, &str> {
-  fn convert(byte: u8) -> Result<u8, &'static str> {
-    match byte {
-      b'a'...b'f' => Ok(10 + byte - b'a'),
-      b'A'...b'F' => Ok(10 + byte - b'A'),
-      b'0'...b'9' => Ok(byte - b'0'),
-      _ => Err("invalid hex")
+/* Parses a single hex value "0x.." of length in bytes >= 1. */
+named!(hex_value<&[u8], Vec<u8>>,
+  map!(do_parse!(
+    opt!(blanks) >>
+    tag!("0x") >> h:
+    many1!(one_of!("0123456789abcdef")) >>
+    opt!(blanks) >>
+    (h)
+  ), |h: Vec<char>| {
+    fn convert(byte: u8) -> u8 {
+      match byte {
+        b'a'...b'f' => 10 + byte - b'a',
+        b'A'...b'F' => 10 + byte - b'A',
+        b'0'...b'9' => byte - b'0',
+        _ => unreachable!()
+      }
     }
-  }
 
-  assert!(bytes.len() == 2);
+    let offset = h.len() & 1;
+    let chars = &h[offset..];
 
-  println!("byte...");
-  convert(bytes[0]).and_then(|hi| {
-    convert(bytes[1]).and_then(|lo| {
-      println!("byte: {}", hi * 16 + lo);
-      Ok(hi * 16 + lo)
+    let mut bytes : Vec<u8> = chars.chunks(2).map(|chunk| {
+      (convert(chunk[0] as u8) << 4) + convert(chunk[1] as u8)
+    }).collect();
+
+    if offset == 1 {
+      bytes.insert(0, convert(h[0] as u8));
+    }
+
+    bytes
+  })
+);
+
+/* Parses a list of hex values "0x..", separated by commas. */
+named!(hex<&[u8], Vec<u8>>,
+  map!(separated_nonempty_list!(char!(','), hex_value), |hs: Vec<Vec<u8>>| {
+    hs.iter().fold(vec!(), |mut acc, h| {
+      acc.extend(h);
+      acc
     })
   })
-})));*/
+);
 
 /* Parses a value given after '='. */
-named!(value<&[u8], Vec<u8>>, alt!(string));
+named!(value<&[u8], Vec<u8>>, alt!(string | hex));
 
 /* Parses a TLS record definition. */
 named!(record<Record>, chain!(
@@ -159,7 +182,7 @@ named!(block<&[u8], Vec<Field>>,
 
 #[cfg(test)]
 mod tests {
-  use super::{block, field, record, string, opaque, uintx};
+  use super::{block, field, hex, opaque, record, string, uintx};
   use super::{Field, Type};
   use nom::IResult::*;
   use nom;
@@ -189,6 +212,25 @@ mod tests {
       Done(_, fs) => assert_eq!(fs, fields),
       _ => assert!(false)
     }
+  }
+
+  #[test]
+  fn test_string() {
+    assert_eq!(string(b"\"asdf\""), Done(&b""[..], b"asdf".to_vec()));
+    assert_eq!(string(b"\"as\ndf\""), Done(&b""[..], b"as\ndf".to_vec()));
+  }
+
+  #[test]
+  fn test_hex() {
+    assert_eq!(hex(b"0xa"), Done(&b""[..], b"\n".to_vec()));
+    assert_eq!(hex(b"0x61"), Done(&b""[..], b"a".to_vec()));
+    assert_eq!(hex(b"0xa61"), Done(&b""[..], b"\na".to_vec()));
+    assert_eq!(hex(b"0x6161"), Done(&b""[..], b"aa".to_vec()));
+
+    assert_eq!(hex(b"0xa,0xa"), Done(&b""[..], b"\n\n".to_vec()));
+    assert_eq!(hex(b"0xa, 0xa"), Done(&b""[..], b"\n\n".to_vec()));
+    assert_eq!(hex(b"0x61,0x61"), Done(&b""[..], b"aa".to_vec()));
+    assert_eq!(hex(b"0x61, 0x61"), Done(&b""[..], b"aa".to_vec()));
   }
 
   #[test]
@@ -302,12 +344,9 @@ mod tests {
                Error(nom::ErrorKind::Tag));
   }
 
-  #[test]
+  /*#[test]
   fn it_works() {
-    assert_eq!(string(b"\"asdf\""), Done(&b""[..], b"asdf".to_vec()));
-    //assert_eq!(hex(b"0x61,0x73,0x64,0x66"), Done(&b""[..], b"asdf".to_vec()));
-
-    //parse_record("record test = \"asdf\"", "test", b"asdf");
-    //parse_record("record test = 0x61, 0x73, 0x64, 0x66", "test", b"asdf");
-  }
+    parse_record("record test = \"asdf\"", "test", b"asdf");
+    parse_record("record test = 0x61, 0x73, 0x64, 0x66", "test", b"asdf");
+  }*/
 }
