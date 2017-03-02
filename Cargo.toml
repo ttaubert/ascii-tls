@@ -4,4 +4,5 @@ version = "0.1.0"
 authors = ["Tim Taubert <tim@timtaubert.de>"]
 
 [dependencies]
+byteorder = "1"
 nom = "^2.1"

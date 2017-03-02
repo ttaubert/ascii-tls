@@ -1,6 +1,7 @@
 use std::iter::FromIterator;
 use std::str::from_utf8;
 
+use byteorder::{BigEndian, WriteBytesExt};
 use nom::{alphanumeric, digit, eol, multispace, not_line_ending, space};
 
 use types::{Field, Record, Type};
@@ -78,8 +79,18 @@ named!(hex<&[u8], Vec<u8>>,
   })
 );
 
+/* A good old, plain number. 64 bits max. */
+named!(number<&[u8], Vec<u8>>,
+  map_res!(map_res!(map_res!(digit, from_utf8), |x: &str| {
+    u64::from_str_radix(x, 10)
+  }), |n: u64| {
+    let mut wtr = vec![];
+    wtr.write_u64::<BigEndian>(n).map(|_| wtr)
+  })
+);
+
 /* Parses a value given after '='. */
-named!(value<&[u8], Vec<u8>>, alt!(string | hex));
+named!(value<&[u8], Vec<u8>>, alt!(string | hex | number));
 
 /* Parses a TLS record definition. */
 named!(record<Record>, chain!(
@@ -122,7 +133,8 @@ named!(opaque<&[u8], Type>,
     do_parse!(
       tag!("opaque(") >>
       w: delimited!(opt!(blanks), uint_width, opt!(blanks)) >>
-      tag!(")") >> (w)
+      tag!(")") >>
+      (w)
     ) | do_parse!(
       tag!("opaque") >> not!(tag!("(")) >> (0)
     )
@@ -231,6 +243,7 @@ mod tests {
     assert_eq!(hex(b"0xa, 0xa"), Done(&b""[..], b"\n\n".to_vec()));
     assert_eq!(hex(b"0x61,0x61"), Done(&b""[..], b"aa".to_vec()));
     assert_eq!(hex(b"0x61, 0x61"), Done(&b""[..], b"aa".to_vec()));
+    assert_eq!(hex(b"0x61, /* foo */ 0x61"), Done(&b""[..], b"aa".to_vec()));
   }
 
   #[test]
@@ -271,6 +284,14 @@ mod tests {
     parse_field("opaque(uint16 ) field=\"value\";", Type::Opaque(2), b"value");
     parse_field("opaque( uint16 ) field=\"value\";", Type::Opaque(2), b"value");
     parse_field("opaque( uint16 /* test */ ) field=\"value\";", Type::Opaque(2), b"value");
+
+    parse_field("uint8 field = 0x61;", Type::Uint(1), b"a");
+    parse_field("uint8 field = 0x6161;", Type::Uint(1), b"aa");
+    parse_field("uint8 field = 0x61, 0x61;", Type::Uint(1), b"aa");
+
+    parse_field("uint8 field = 97;", Type::Uint(1), &[0, 0, 0, 0, 0, 0, 0, 97]);
+    parse_field("uint8 field = 097;", Type::Uint(1), &[0, 0, 0, 0, 0, 0, 0, 97]);
+    parse_field("uint16 field = 8192;", Type::Uint(2), &[0, 0, 0, 0, 0, 0, 32, 0]);
   }
 
   #[test]
