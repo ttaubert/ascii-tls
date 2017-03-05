@@ -93,16 +93,18 @@ named!(number<&[u8], Value>,
 named!(value<&[u8], Value>, alt!(string | hex | number | block));
 
 /* Parses a TLS record definition. */
-/*named!(record<Record>, chain!(
-                         tag!("record") ~
-                         multispace ~
-                         n: map_res!(alphanumeric, from_utf8) ~
-                         multispace? ~ // TODO opt!()
-                         tag!("=") ~
-                         multispace? ~ // TODO opt!()
-                         v: value,
-                         || { Record::new(n.to_string(), v) }
-                       ));*/
+/*named!(record<Record>,
+  do_parse!(
+    tag!("record") >>
+    blanks >>
+    n: map_res!(alphanumeric, from_utf8) >>
+    opt!(blanks) >>
+    char!("=") >>
+    opt!(blanks) >>
+    v: value >>
+    (Record::new(n.to_string(), v))
+  )
+);*/
 
 // Returns the width in bytes for a given "uint" data type.
 named!(uint_width<&[u8], u8>,
