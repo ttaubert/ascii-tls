@@ -4,7 +4,7 @@ use std::str::from_utf8;
 use byteorder::{BigEndian, WriteBytesExt};
 use nom::{alphanumeric, digit, eol, multispace, not_line_ending, space};
 
-use types::{Field, Record, Type};
+use types::{Field, Record, Type, Value};
 
 // A "//" to comment out the rest of the line.
 named!(comment_one_line,
@@ -29,10 +29,10 @@ named!(blanks,
 
 // TODO replace \" \t \r \n \0 \\
 /* Parses a string delimited by quotation marks. */
-named!(string<&[u8], Vec<u8>>,
+named!(string<&[u8], Value>,
   map!(
     delimited!(char!('"'), is_not!("\""), char!('"')),
-    |s: &[u8]| { s.to_vec() }
+    |s: &[u8]| { Value::String(s.to_vec()) }
   )
 );
 
@@ -70,30 +70,31 @@ named!(hex_value<&[u8], Vec<u8>>,
 );
 
 /* Parses a list of hex values "0x..", separated by commas. */
-named!(hex<&[u8], Vec<u8>>,
+named!(hex<&[u8], Value>,
   map!(separated_nonempty_list!(char!(','), hex_value), |hs: Vec<Vec<u8>>| {
-    hs.iter().fold(vec!(), |mut acc, h| {
+    Value::Hex(hs.iter().fold(vec!(), |mut acc, h| {
       acc.extend(h);
       acc
-    })
+    }))
   })
 );
 
 /* A good old, plain number. 64 bits max. */
-named!(number<&[u8], Vec<u8>>,
+named!(number<&[u8], Value>,
   map_res!(map_res!(map_res!(digit, from_utf8), |x: &str| {
     u64::from_str_radix(x, 10)
   }), |n: u64| {
-    let mut wtr = vec![];
-    wtr.write_u64::<BigEndian>(n).map(|_| wtr)
+    let mut wtr = vec!();
+    wtr.write_u64::<BigEndian>(n).map(|_| Value::Number(wtr))
   })
 );
 
+// TODO add blocks
 /* Parses a value given after '='. */
-named!(value<&[u8], Vec<u8>>, alt!(string | hex | number));
+named!(value<&[u8], Value>, alt!(string | hex | number));
 
 /* Parses a TLS record definition. */
-named!(record<Record>, chain!(
+/*named!(record<Record>, chain!(
                          tag!("record") ~
                          multispace ~
                          n: map_res!(alphanumeric, from_utf8) ~
@@ -102,7 +103,7 @@ named!(record<Record>, chain!(
                          multispace? ~ // TODO opt!()
                          v: value,
                          || { Record::new(n.to_string(), v) }
-                       ));
+                       ));*/
 
 // Returns the width in bytes for a given "uint" data type.
 named!(uint_width<&[u8], u8>,
@@ -194,12 +195,12 @@ named!(block<&[u8], Vec<Field>>,
 
 #[cfg(test)]
 mod tests {
-  use super::{block, field, hex, opaque, record, string, uintx};
-  use super::{Field, Type};
+  use super::{block, field, hex, opaque, string, uintx};
+  use super::{Field, Type, Value};
   use nom::IResult::*;
   use nom;
 
-  fn parse_record(input: &str, name: &str, value: &[u8]) {
+  /*fn parse_record(input: &str, name: &str, value: &[u8]) {
     match record(input.as_bytes()) {
       Done(_, rec) => {
         assert_eq!(rec.name(), name);
@@ -207,13 +208,13 @@ mod tests {
       }
       _ => assert!(false)
     }
-  }
+  }*/
 
-  fn parse_field(input: &str, typ: Type, value: &[u8]) {
+  fn parse_field(input: &str, typ: Type, value: Value) {
     match field(input.as_bytes()) {
       Done(_, f) => {
         assert_eq!(f.typ(), &typ);
-        assert_eq!(f.value(), value);
+        assert_eq!(*f.value(), value);
       }
       _ => assert!(false)
     }
@@ -228,22 +229,22 @@ mod tests {
 
   #[test]
   fn test_string() {
-    assert_eq!(string(b"\"asdf\""), Done(&b""[..], b"asdf".to_vec()));
-    assert_eq!(string(b"\"as\ndf\""), Done(&b""[..], b"as\ndf".to_vec()));
+    assert_eq!(string(b"\"asdf\""), Done(&b""[..], Value::String(b"asdf".to_vec())));
+    assert_eq!(string(b"\"as\ndf\""), Done(&b""[..], Value::String(b"as\ndf".to_vec())));
   }
 
   #[test]
   fn test_hex() {
-    assert_eq!(hex(b"0xa"), Done(&b""[..], b"\n".to_vec()));
-    assert_eq!(hex(b"0x61"), Done(&b""[..], b"a".to_vec()));
-    assert_eq!(hex(b"0xa61"), Done(&b""[..], b"\na".to_vec()));
-    assert_eq!(hex(b"0x6161"), Done(&b""[..], b"aa".to_vec()));
+    assert_eq!(hex(b"0xa"), Done(&b""[..], Value::Hex(b"\n".to_vec())));
+    assert_eq!(hex(b"0x61"), Done(&b""[..], Value::Hex(b"a".to_vec())));
+    assert_eq!(hex(b"0xa61"), Done(&b""[..], Value::Hex(b"\na".to_vec())));
+    assert_eq!(hex(b"0x6161"), Done(&b""[..], Value::Hex(b"aa".to_vec())));
 
-    assert_eq!(hex(b"0xa,0xa"), Done(&b""[..], b"\n\n".to_vec()));
-    assert_eq!(hex(b"0xa, 0xa"), Done(&b""[..], b"\n\n".to_vec()));
-    assert_eq!(hex(b"0x61,0x61"), Done(&b""[..], b"aa".to_vec()));
-    assert_eq!(hex(b"0x61, 0x61"), Done(&b""[..], b"aa".to_vec()));
-    assert_eq!(hex(b"0x61, /* foo */ 0x61"), Done(&b""[..], b"aa".to_vec()));
+    assert_eq!(hex(b"0xa,0xa"), Done(&b""[..], Value::Hex(b"\n\n".to_vec())));
+    assert_eq!(hex(b"0xa, 0xa"), Done(&b""[..], Value::Hex(b"\n\n".to_vec())));
+    assert_eq!(hex(b"0x61,0x61"), Done(&b""[..], Value::Hex(b"aa".to_vec())));
+    assert_eq!(hex(b"0x61, 0x61"), Done(&b""[..], Value::Hex(b"aa".to_vec())));
+    assert_eq!(hex(b"0x61, /* foo */ 0x61"), Done(&b""[..], Value::Hex(b"aa".to_vec())));
   }
 
   #[test]
@@ -272,26 +273,26 @@ mod tests {
 
   #[test]
   fn test_field() {
-    parse_field("uint8 field = \"value\";", Type::Uint(1), b"value");
-    parse_field(" uint8 field = \"value\" ;", Type::Uint(1), b"value");
-    parse_field("uint8 field=\"value\";", Type::Uint(1), b"value");
-    parse_field("uint24 field = \"value\";", Type::Uint(3), b"value");
+    parse_field("uint8 field = \"value\";", Type::Uint(1), Value::String(b"value".to_vec()));
+    parse_field(" uint8 field = \"value\" ;", Type::Uint(1), Value::String(b"value".to_vec()));
+    parse_field("uint8 field=\"value\";", Type::Uint(1), Value::String(b"value".to_vec()));
+    parse_field("uint24 field = \"value\";", Type::Uint(3), Value::String(b"value".to_vec()));
 
-    parse_field("opaque field = \"value\";", Type::Opaque(0), b"value");
-    parse_field("opaque(uint8) field = \"value\";", Type::Opaque(1), b"value");
-    parse_field("opaque(uint16) field=\"value\";", Type::Opaque(2), b"value");
+    parse_field("opaque field = \"value\";", Type::Opaque(0), Value::String(b"value".to_vec()));
+    parse_field("opaque(uint8) field = \"value\";", Type::Opaque(1), Value::String(b"value".to_vec()));
+    parse_field("opaque(uint16) field=\"value\";", Type::Opaque(2), Value::String(b"value".to_vec()));
 
-    parse_field("opaque(uint16 ) field=\"value\";", Type::Opaque(2), b"value");
-    parse_field("opaque( uint16 ) field=\"value\";", Type::Opaque(2), b"value");
-    parse_field("opaque( uint16 /* test */ ) field=\"value\";", Type::Opaque(2), b"value");
+    parse_field("opaque(uint16 ) field=\"value\";", Type::Opaque(2), Value::String(b"value".to_vec()));
+    parse_field("opaque( uint16 ) field=\"value\";", Type::Opaque(2), Value::String(b"value".to_vec()));
+    parse_field("opaque( uint16 /* test */ ) field=\"value\";", Type::Opaque(2), Value::String(b"value".to_vec()));
 
-    parse_field("uint8 field = 0x61;", Type::Uint(1), b"a");
-    parse_field("uint8 field = 0x6161;", Type::Uint(1), b"aa");
-    parse_field("uint8 field = 0x61, 0x61;", Type::Uint(1), b"aa");
+    parse_field("uint8 field = 0x61;", Type::Uint(1), Value::Hex(b"a".to_vec()));
+    parse_field("uint8 field = 0x6161;", Type::Uint(1), Value::Hex(b"aa".to_vec()));
+    parse_field("uint8 field = 0x61, 0x61;", Type::Uint(1), Value::Hex(b"aa".to_vec()));
 
-    parse_field("uint8 field = 97;", Type::Uint(1), &[0, 0, 0, 0, 0, 0, 0, 97]);
-    parse_field("uint8 field = 097;", Type::Uint(1), &[0, 0, 0, 0, 0, 0, 0, 97]);
-    parse_field("uint16 field = 8192;", Type::Uint(2), &[0, 0, 0, 0, 0, 0, 32, 0]);
+    parse_field("uint8 field = 97;", Type::Uint(1), Value::Number(vec!(0, 0, 0, 0, 0, 0, 0, 97)));
+    parse_field("uint8 field = 097;", Type::Uint(1), Value::Number(vec!(0, 0, 0, 0, 0, 0, 0, 97)));
+    parse_field("uint16 field = 24929;", Type::Uint(2), Value::Number(vec!(0, 0, 0, 0, 0, 0, 97, 97)));
   }
 
   #[test]
@@ -302,23 +303,23 @@ mod tests {
     parse_block("{ \n }", vec!());
 
     parse_block("{uint8 field = \"value\";}",
-                vec!(Field::new(Type::Uint(1), b"value".to_vec())));
+                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
     parse_block("{uint8 field = \"value\" ; }",
-                vec!(Field::new(Type::Uint(1), b"value".to_vec())));
+                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
     parse_block("{uint8 field = \"value\"}",
-                vec!(Field::new(Type::Uint(1), b"value".to_vec())));
+                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
 
     parse_block("{uint8 field = \"value\";uint8 field = \"value\";}",
-                vec!(Field::new(Type::Uint(1), b"value".to_vec()),
-                     Field::new(Type::Uint(1), b"value".to_vec())));
+                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
+                     Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
 
     parse_block("{uint8 field = \"value\"; uint8 field = \"value\";}",
-                vec!(Field::new(Type::Uint(1), b"value".to_vec()),
-                     Field::new(Type::Uint(1), b"value".to_vec())));
+                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
+                     Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
 
     parse_block("{uint8 field = \"value\"; uint8 field = \"value\"}",
-                vec!(Field::new(Type::Uint(1), b"value".to_vec()),
-                     Field::new(Type::Uint(1), b"value".to_vec())));
+                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
+                     Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
 
     parse_block(
 "{
@@ -326,7 +327,7 @@ mod tests {
    uint8 field = \"value\";
  }",
       vec!(
-        Field::new(Type::Uint(1), b"value".to_vec())
+        Field::new(Type::Uint(1), Value::String(b"value".to_vec()))
       ));
 
     parse_block(
@@ -337,7 +338,7 @@ mod tests {
     */
  }",
       vec!(
-        Field::new(Type::Uint(1), b"value".to_vec())
+        Field::new(Type::Uint(1), Value::String(b"value".to_vec()))
       ));
 
     parse_block(
@@ -348,8 +349,8 @@ mod tests {
    uint16 field = \"value2\"; // this is okay too
  }",
       vec!(
-        Field::new(Type::Uint(1), b"value".to_vec()),
-        Field::new(Type::Uint(2), b"value2".to_vec())
+        Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
+        Field::new(Type::Uint(2), Value::String(b"value2".to_vec()))
       ));
   }
 
