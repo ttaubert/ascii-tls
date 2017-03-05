@@ -89,9 +89,8 @@ named!(number<&[u8], Value>,
   })
 );
 
-// TODO add blocks
 /* Parses a value given after '='. */
-named!(value<&[u8], Value>, alt!(string | hex | number));
+named!(value<&[u8], Value>, alt!(string | hex | number | block));
 
 /* Parses a TLS record definition. */
 /*named!(record<Record>, chain!(
@@ -182,15 +181,26 @@ named!(field_list<&[u8], Vec<Field>>,
 //     uint8 type = handshake;
 //     uint24 length = 0x0000ff;
 //   }
-named!(block<&[u8], Vec<Field>>,
-  do_parse!(
+named!(block<&[u8], Value>,
+  map_opt!(do_parse!(
     tag!("{") >>
     opt!(blanks) >>
     fs: field_list >>
     opt!(blanks) >>
     tag!("}") >>
     (fs)
-  )
+  ), |fs: Vec<Field>| {
+    let mut bytes = vec!();
+
+    for f in fs {
+      match f.to_bytes() {
+        Some(v) => bytes.extend(v),
+        None => return None
+      }
+    }
+
+    Some(Value::Block(bytes))
+  })
 );
 
 #[cfg(test)]
@@ -220,9 +230,9 @@ mod tests {
     }
   }
 
-  fn parse_block(input: &str, fields: Vec<Field>) {
+  fn parse_block(input: &str, value: Value) {
     match block(input.as_bytes()) {
-      Done(_, fs) => assert_eq!(fs, fields),
+      Done(_, fs) => assert_eq!(fs, value),
       _ => assert!(false)
     }
   }
@@ -293,76 +303,63 @@ mod tests {
     parse_field("uint8 field = 97;", Type::Uint(1), Value::Number(vec!(0, 0, 0, 0, 0, 0, 0, 97)));
     parse_field("uint8 field = 097;", Type::Uint(1), Value::Number(vec!(0, 0, 0, 0, 0, 0, 0, 97)));
     parse_field("uint16 field = 24929;", Type::Uint(2), Value::Number(vec!(0, 0, 0, 0, 0, 0, 97, 97)));
+
+    parse_field("uint8 field = {};", Type::Uint(1), Value::Block(vec!()));
+    parse_field("uint16 field = {};", Type::Uint(2), Value::Block(vec!()));
+    parse_field("uint8 field = { uint8 foo = 97 };", Type::Uint(1), Value::Block(vec!(97)));
+    parse_field("uint8 field = { uint16 foo = 97 };", Type::Uint(1), Value::Block(vec!(0, 97)));
+    parse_field("uint8 field = { uint16 foo = {} };", Type::Uint(1), Value::Block(vec!(0, 0)));
+    parse_field("uint8 field = { uint16 foo = { uint8 bar = 97 } };", Type::Uint(1), Value::Block(vec!(0, 97)));
+    parse_field("uint16 field = { uint8 foo = {} };", Type::Uint(2), Value::Block(vec!(0)));
   }
 
   #[test]
   fn test_block_success() {
-    parse_block("{}", vec!());
-    parse_block("{} ", vec!());
-    parse_block("{ }", vec!());
-    parse_block("{ \n }", vec!());
+    parse_block("{}", Value::Block(vec!()));
+    parse_block("{} ", Value::Block(vec!()));
+    parse_block("{ }", Value::Block(vec!()));
+    parse_block("{ \n }", Value::Block(vec!()));
 
-    parse_block("{uint8 field = \"value\";}",
-                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
-    parse_block("{uint8 field = \"value\" ; }",
-                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
-    parse_block("{uint8 field = \"value\"}",
-                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
+    parse_block("{uint8 field = \"a\";}", Value::Block(vec!(97)));
+    parse_block("{uint8 field = \"a\" ; }", Value::Block(vec!(97)));
+    parse_block("{uint8 field = \"a\"}", Value::Block(vec!(97)));
 
-    parse_block("{uint8 field = \"value\";uint8 field = \"value\";}",
-                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
-                     Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
-
-    parse_block("{uint8 field = \"value\"; uint8 field = \"value\";}",
-                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
-                     Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
-
-    parse_block("{uint8 field = \"value\"; uint8 field = \"value\"}",
-                vec!(Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
-                     Field::new(Type::Uint(1), Value::String(b"value".to_vec()))));
+    parse_block("{uint8 field = \"a\";uint8 field = \"a\";}", Value::Block(vec!(97, 97)));
+    parse_block("{uint8 field = \"a\"; uint8 field = \"a\";}", Value::Block(vec!(97, 97)));
+    parse_block("{uint8 field = \"a\"; uint8 field = \"a\"}", Value::Block(vec!(97, 97)));
 
     parse_block(
 "{
    // here's a comment
-   uint8 field = \"value\";
- }",
-      vec!(
-        Field::new(Type::Uint(1), Value::String(b"value".to_vec()))
-      ));
+   uint8 field = \"a\";
+ }", Value::Block(vec!(97)));
 
     parse_block(
 "{
-   /* a */ uint8 /* b */ field /* c */ = /* d */ \"value\" /* e */; // f
+   /* a */ uint8 /* b */ field /* c */ = /* d */ \"a\" /* e */; // f
    /*
-    * uint16 field = \"value2\";
+    * uint16 field = \"a\";
     */
- }",
-      vec!(
-        Field::new(Type::Uint(1), Value::String(b"value".to_vec()))
-      ));
+ }", Value::Block(vec!(97)));
 
     parse_block(
 "{
    // here's a comment
-   uint8 field = \"value\"; // this should work
+   uint8 field = \"a\"; // this should work
    // here's another comment
-   uint16 field = \"value2\"; // this is okay too
- }",
-      vec!(
-        Field::new(Type::Uint(1), Value::String(b"value".to_vec())),
-        Field::new(Type::Uint(2), Value::String(b"value2".to_vec()))
-      ));
+   uint16 field = \"a\"; // this is okay too
+ }", Value::Block(vec!(97, 0, 97)));
   }
 
   #[test]
   fn test_block_failure() {
     assert_eq!(block(b"{ ; }"),
                Error(nom::ErrorKind::Tag));
-    assert_eq!(block(b"{ uint8 field \"value\" }"),
+    assert_eq!(block(b"{ uint8 field \"a\" }"),
                Error(nom::ErrorKind::Tag));
-    assert_eq!(block(b"{ uint8 field = \"value\";; }"),
+    assert_eq!(block(b"{ uint8 field = \"a\";; }"),
                Error(nom::ErrorKind::Tag));
-    assert_eq!(block(b"{ uint8 field = \"value\" uint16 field = \"value2\" }"),
+    assert_eq!(block(b"{ uint8 field = \"a\" uint16 field = \"a\" }"),
                Error(nom::ErrorKind::Tag));
   }
 

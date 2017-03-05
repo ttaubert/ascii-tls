@@ -33,9 +33,10 @@ pub enum Type {
 // A parsed value denoting a value type to allow better interpretation.
 #[derive(Debug, PartialEq)]
 pub enum Value {
+  Block(Vec<u8>),
+  Hex(Vec<u8>),
   Number(Vec<u8>),
-  String(Vec<u8>),
-  Hex(Vec<u8>)
+  String(Vec<u8>)
 }
 
 // TODO
@@ -73,8 +74,8 @@ impl<'a> Field {
     assert!(width <= 8);
 
     let v = match self.value {
-      // Hex and String values must not exceed the given type.
-      Value::Hex(ref v) | Value::String(ref v) => {
+      // Block, Hex, and String values must not exceed the given type.
+      Value::Block(ref v) | Value::Hex(ref v) | Value::String(ref v) => {
         if v.len() > width {
           return None;
         }
@@ -108,7 +109,7 @@ impl<'a> Field {
     assert!(width <= 8);
 
     let mut v : Vec<u8> = match self.value {
-      Value::Hex(ref v) | Value::String(ref v) => {
+      Value::Block(ref v) | Value::Hex(ref v) | Value::String(ref v) => {
         if width > 0 {
           // Payload length must fit into the length prefix.
           if v.len() >= 2usize.pow(width as u32 * 8) {
@@ -168,6 +169,10 @@ mod tests {
     eq_uint(w, Value::Hex(inp), res);
   }
 
+  fn eq_uint_block(w: u8, inp: Vec<u8>, res: Option<Vec<u8>>) {
+    eq_uint(w, Value::Block(inp), res);
+  }
+
   fn eq_uint_number(w: u8, inp: Vec<u8>, res: Option<Vec<u8>>) {
     eq_uint(w, Value::Number(inp), res);
   }
@@ -182,6 +187,10 @@ mod tests {
 
   fn eq_opaque_hex(w: u8, inp: Vec<u8>, res: Option<Vec<u8>>) {
     eq_opaque(w, Value::Hex(inp), res);
+  }
+
+  fn eq_opaque_block(w: u8, inp: Vec<u8>, res: Option<Vec<u8>>) {
+    eq_opaque(w, Value::Block(inp), res);
   }
 
   fn eq_opaque_number(w: u8, inp: Vec<u8>, res: Option<Vec<u8>>) {
@@ -223,6 +232,24 @@ mod tests {
 
     // uint16 foo = 0x61, 0x61, 0x61;
     eq_uint_hex(2, vec!(97, 97, 97), None);
+  }
+
+  #[test]
+  fn test_uint_blocks() {
+    // uint8 foo = {}
+    eq_uint_block(1, vec!(), Some(vec!(0)));
+
+    // uint8 foo = { uint8 bar = "a"; }
+    eq_uint_block(1, vec!(97), Some(vec!(97)));
+
+    // uint8 foo = { uint16 bar = 97; }
+    eq_uint_block(1, vec!(0, 97), None);
+
+    // uint16 foo = { uint16 bar = 97; }
+    eq_uint_block(2, vec!(0, 97), Some(vec!(0, 97)));
+
+    // uint16 foo = { uint8 bar = 97; uint16 baz = 97; }
+    eq_uint_block(2, vec!(97, 0, 97), None);
   }
 
   #[test]
@@ -298,6 +325,32 @@ mod tests {
 
     // opaque(uint8) foo = 0x61 * 256;
     eq_opaque_hex(1, iter::repeat(97).take(256).collect(), None);
+  }
+
+  #[test]
+  fn test_opaque_blocks() {
+    // opaque foo = {};
+    eq_opaque_block(0, vec!(), Some(vec!()));
+
+    // opaque foo = { uint8 bar = 97 };
+    eq_opaque_block(0, vec!(97), Some(vec!(97)));
+
+    // opaque foo = { uint8 bar = 97; uint8 baz = 97 };
+    eq_opaque_block(0, vec!(97, 97), Some(vec!(97, 97)));
+
+    // opaque foo = { uint8 bar = 97; uint8 baz = 97; uint8 bax = 97 };
+    eq_opaque_block(0, vec!(97, 97, 97), Some(vec!(97, 97, 97)));
+
+    // opaque(uint8) foo = { uint8 bar = 97 };
+    eq_opaque_block(1, vec!(97), Some(vec!(1, 97)));
+
+    // opaque(uint8) foo = { uint8 bar = 97 /* x 255 */ };
+    let inp : Vec<u8> = iter::repeat(97).take(255).collect();
+    let res = vec!(255).into_iter().chain(inp.iter().cloned()).collect();
+    eq_opaque_block(1, inp, Some(res));
+
+    // opaque(uint8) foo = { uint8 bar = 97 /* x 256 */ };
+    eq_opaque_block(1, iter::repeat(97).take(256).collect(), None);
   }
 
   #[test]
